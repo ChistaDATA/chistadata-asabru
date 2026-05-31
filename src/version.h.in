@@ -1,0 +1,15 @@
+#pragma once
+/**
+ * @file version.h
+ * @brief Auto-generated version constants for Chista Asabru.
+ *
+ * This file is generated from version.h.in by CMake's configure_file().
+ * Do not edit it by hand — modify CMakeLists.txt instead.
+ */
+
+#define CHISTA_ASABRU_VERSION_MAJOR @Chista_Asabru_VERSION_MAJOR@
+#define CHISTA_ASABRU_VERSION_MINOR @Chista_Asabru_VERSION_MINOR@
+#define CHISTA_ASABRU_VERSION_PATCH @Chista_Asabru_VERSION_PATCH@
+
+#define CHISTA_ASABRU_VERSION_STRING \
+    "@Chista_Asabru_VERSION_MAJOR@.@Chista_Asabru_VERSION_MINOR@.@Chista_Asabru_VERSION_PATCH@"
