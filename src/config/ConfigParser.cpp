@@ -1,311 +1,339 @@
 #include "ConfigParser.h"
 #include "ApiGatewayConfigParser.h"
+#include "logger/Logger.h"
+
+#include <algorithm>
+#include <cctype>
+#include <stdexcept>
+#include <string>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal helpers (anonymous namespace = file-private linkage)
+// ─────────────────────────────────────────────────────────────────────────────
+namespace {
+
+/**
+ * @brief Safe text extraction from a tinyxml2 element.
+ *
+ * Returns an empty string if @p el is null or its text is null, rather than
+ * crashing with a null dereference.
+ */
+inline std::string safeText(const XMLElement *el,
+                             const std::string &defaultVal = "") {
+    if (!el) return defaultVal;
+    const char *txt = el->GetText();
+    return txt ? std::string(txt) : defaultVal;
+}
+
+/**
+ * @brief Convert a string to lower-case in-place.
+ */
+inline void toLower(std::string &s) {
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+}
+
+} // namespace
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ParseConfiguration
+// ─────────────────────────────────────────────────────────────────────────────
 
 XMLError ConfigParser::ParseConfiguration(
-	XMLDocument *xmlDoc,
-	PROXY_CONFIG &m_ProxyConfig,
-	std::vector<PROTOCOL_SERVER_CONFIG> &m_ProtocolConfig,
-	API_GATEWAY_SERVER_CONFIG &m_ApiGatewayConfig
-	) {
-	XMLNode *pRoot = xmlDoc->FirstChildElement("clickhouse-proxy-v2");
-	if (pRoot == nullptr) {
-		return XML_ERROR_FILE_READ_ERROR;
-	}
+        XMLDocument *xmlDoc,
+        PROXY_CONFIG &m_ProxyConfig,
+        std::vector<PROTOCOL_SERVER_CONFIG> &m_ProtocolConfig,
+        API_GATEWAY_SERVER_CONFIG &m_ApiGatewayConfig) {
+    if (!xmlDoc) {
+        LOG_ERROR("ParseConfiguration: null XMLDocument pointer.");
+        return XML_ERROR_FILE_READ_ERROR;
+    }
 
-	/**
-	 * Get Protocol Server configurations
-	 */
-	LoadProtocolServerConfigurations(pRoot, m_ProtocolConfig);
+    XMLNode *pRoot = xmlDoc->FirstChildElement("clickhouse-proxy-v2");
+    if (!pRoot) {
+        LOG_ERROR("ParseConfiguration: root element <clickhouse-proxy-v2> not found.");
+        return XML_ERROR_FILE_READ_ERROR;
+    }
 
-	/**
-	 * Get proxy configurations
-	 */
-	LoadProxyServerConfigurations(pRoot, m_ProxyConfig);
+    LoadProtocolServerConfigurations(pRoot, m_ProtocolConfig);
+    LoadProxyServerConfigurations(pRoot, m_ProxyConfig);
+    ApiGatewayConfigParser::ParseConfiguration(pRoot, m_ApiGatewayConfig);
 
-	/**
-	 * Get API Gateway Configuration
-	 */
-	ApiGatewayConfigParser::ParseConfiguration(pRoot, m_ApiGatewayConfig);
-
-	LOG_INFO("Configuration parsed successfully!");
-	return XML_SUCCESS;
+    LOG_INFO("Configuration parsed successfully.");
+    return XML_SUCCESS;
 }
 
-XMLError ConfigParser::LoadProxyServerConfigurations(XMLNode *pRoot, PROXY_CONFIG &m_ProxyConfig) {
-	PROXY_CONFIG proxyConfig;
-	// Get 'clusters'
-	XMLElement *pClusters = pRoot->FirstChildElement("CLUSTERS");
-	if (NULL != pClusters) {
-		XMLElement *pCluster = pClusters->FirstChildElement("CLUSTER");
-		if (pCluster == nullptr) {
-			return XML_ERROR_PARSING_ELEMENT;
-		}
-		while (pCluster) {
-			CLUSTER cluster;
-			auto clusterName = pCluster->Attribute("name");
-			cluster.clusterName = clusterName;
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadProxyServerConfigurations
+// ─────────────────────────────────────────────────────────────────────────────
 
-			XMLElement *pEndPoints = pCluster->FirstChildElement("END_POINTS");
-			if (NULL != pEndPoints) {
-				XMLElement *pEndPoint = pEndPoints->FirstChildElement("END_POINT");
+XMLError ConfigParser::LoadProxyServerConfigurations(XMLNode *pRoot,
+                                                      PROXY_CONFIG &m_ProxyConfig) {
+    PROXY_CONFIG proxyConfig;
 
-				while (pEndPoint) {
-					REMOTE_END_POINT endPoint;
-					auto endPointName = pEndPoint->Attribute("name");
-					endPoint.endPointName = endPointName;
+    XMLElement *pClusters = pRoot->FirstChildElement("CLUSTERS");
+    if (!pClusters) {
+        // No CLUSTERS element — not an error; just means no proxy endpoints.
+        m_ProxyConfig = proxyConfig;
+        return XML_SUCCESS;
+    }
 
-					XMLElement *pReadWrite = pEndPoint->FirstChildElement("READ_WRITE");
-					if (NULL != pReadWrite) {
-						endPoint.readWrite = pEndPoint->GetText();
-					}
+    XMLElement *pCluster = pClusters->FirstChildElement("CLUSTER");
+    while (pCluster) {
+        CLUSTER cluster;
+        const char *clusterName = pCluster->Attribute("name");
+        cluster.clusterName = clusterName ? clusterName : "";
 
-					XMLElement *pProxyPort = pEndPoint->FirstChildElement("PROXY_PORT");
-					if (NULL != pProxyPort) {
-						auto proxyPort = 0;
-						XMLError eResult = pProxyPort->QueryIntText(&proxyPort);
-						endPoint.proxyPort = proxyPort;
-						XMLCheckResult(eResult);
-					}
+        XMLElement *pEndPoints = pCluster->FirstChildElement("END_POINTS");
+        if (pEndPoints) {
+            XMLElement *pEndPoint = pEndPoints->FirstChildElement("END_POINT");
+            while (pEndPoint) {
+                REMOTE_END_POINT endPoint;
+                const char *epName = pEndPoint->Attribute("name");
+                endPoint.endPointName = epName ? epName : "";
 
-					XMLElement *handlerElement = pEndPoint->FirstChildElement("HANDLER");
-					if (NULL != handlerElement) {
-						auto handler = "";
-						handler = handlerElement->GetText();
-						endPoint.handler = handler;
-					}
+                endPoint.readWrite =
+                    safeText(pEndPoint->FirstChildElement("READ_WRITE")) == "yes";
 
-					XMLElement *pipelineElement = pEndPoint->FirstChildElement("PIPELINE");
-					if (NULL != pipelineElement) {
-						auto pipeline = "";
-						pipeline = pipelineElement->GetText();
-						endPoint.pipeline = pipeline;
-					}
+                XMLElement *pProxyPort = pEndPoint->FirstChildElement("PROXY_PORT");
+                if (pProxyPort) {
+                    int port = 0;
+                    XMLError err = pProxyPort->QueryIntText(&port);
+                    if (err != XML_SUCCESS) {
+                        LOG_ERROR("Invalid PROXY_PORT for endpoint '"
+                                  + endPoint.endPointName + "'");
+                        return err;
+                    }
+                    if (port <= 0 || port > 65535) {
+                        LOG_ERROR("PROXY_PORT " + std::to_string(port)
+                                  + " out of range for endpoint '"
+                                  + endPoint.endPointName + "'");
+                        return XML_ERROR_PARSING_ELEMENT;
+                    }
+                    endPoint.proxyPort = port;
+                }
 
-					XMLElement *loadBalancerStrategyElement = pEndPoint->FirstChildElement("loadbalancer-strategy");
-					if (NULL != loadBalancerStrategyElement) {
-						auto loadBalancerStrategy = "";
-						loadBalancerStrategy = loadBalancerStrategyElement->GetText();
-						endPoint.loadBalancerStrategy = loadBalancerStrategy;
-					}
+                endPoint.handler  = safeText(pEndPoint->FirstChildElement("HANDLER"));
+                endPoint.pipeline = safeText(pEndPoint->FirstChildElement("PIPELINE"));
+                endPoint.loadBalancerStrategy =
+                    safeText(pEndPoint->FirstChildElement("loadbalancer-strategy"));
 
-					XMLElement *pServices = pEndPoint->FirstChildElement("SERVICES");
-					if (pServices == nullptr) {
-						return XML_ERROR_PARSING_ELEMENT;
-					}
+                XMLElement *pServices = pEndPoint->FirstChildElement("SERVICES");
+                if (!pServices) {
+                    LOG_ERROR("SERVICES element missing for endpoint '"
+                              + endPoint.endPointName + "'");
+                    return XML_ERROR_PARSING_ELEMENT;
+                }
 
-					if (NULL != pServices) {
-						XMLElement *pService = pServices->FirstChildElement("SERVICE");
-						while (pService) {
-							SERVICE service;
-							auto serviceName = pService->Attribute("name");
-							service.name = serviceName;
-							auto weight = pService->Attribute("weight");
-							if (weight) {
-								service.weight = std::stoi(weight);
-							}
+                XMLElement *pService = pServices->FirstChildElement("SERVICE");
+                while (pService) {
+                    SERVICE service;
+                    const char *svcName = pService->Attribute("name");
+                    service.name = svcName ? svcName : "";
 
-							XMLElement *pHost = pService->FirstChildElement("HOST");
-							if (NULL != pHost) {
-								auto hostName = "";
-								hostName = pHost->GetText();
-								service.host = hostName;
-							}
+                    const char *weightAttr = pService->Attribute("weight");
+                    if (weightAttr) {
+                        try {
+                            service.weight = std::stoi(weightAttr);
+                        } catch (...) {
+                            LOG_ERROR("Invalid weight '" + std::string(weightAttr)
+                                      + "' for service '" + service.name + "'");
+                        }
+                    }
 
-							XMLElement *pSourceHostName = pService->FirstChildElement("SOURCE_HOSTNAME");
-							if (NULL != pSourceHostName) {
-								auto sourceHostname = "";
-								sourceHostname = pSourceHostName->GetText();
-								service.source_hostname = sourceHostname;
-							}
+                    service.host            = safeText(pService->FirstChildElement("HOST"));
+                    service.source_hostname = safeText(pService->FirstChildElement("SOURCE_HOSTNAME"));
 
-							XMLElement *pPort = pService->FirstChildElement("PORT");
-							if (NULL != pPort) {
-								auto port = 0;
-								XMLError eResult = pPort->QueryIntText(&port);
-								service.port = port;
-								XMLCheckResult(eResult);
-							}
+                    XMLElement *pPort = pService->FirstChildElement("PORT");
+                    if (pPort) {
+                        int port = 0;
+                        XMLError err = pPort->QueryIntText(&port);
+                        if (err != XML_SUCCESS) {
+                            LOG_ERROR("Invalid PORT for service '" + service.name + "'");
+                            return err;
+                        }
+                        service.port = port;
+                    }
 
-							endPoint.services.emplace_back(service);
-							// read next sibling element
-							pService = pService->NextSiblingElement("SERVICE");
-						}
-					}
-					cluster.endPoints.emplace_back(endPoint);
-					pEndPoint = pEndPoint->NextSiblingElement("END_POINT");
-				}
-				proxyConfig.clusters.emplace_back(cluster);
-				pCluster = pCluster->NextSiblingElement("CLUSTER");
-			}
-		}
-	}
+                    endPoint.services.emplace_back(service);
+                    pService = pService->NextSiblingElement("SERVICE");
+                }
 
-	m_ProxyConfig = proxyConfig;
-	return XML_SUCCESS;
+                cluster.endPoints.emplace_back(endPoint);
+                pEndPoint = pEndPoint->NextSiblingElement("END_POINT");
+            }
+        }
+
+        proxyConfig.clusters.emplace_back(cluster);
+        pCluster = pCluster->NextSiblingElement("CLUSTER");
+    }
+
+    m_ProxyConfig = proxyConfig;
+    return XML_SUCCESS;
 }
 
-XMLError ConfigParser::LoadProtocolServerConfigurations(XMLNode *root,
-														std::vector<PROTOCOL_SERVER_CONFIG> &m_ProtocolServerConfig) {
-	std::vector<PROTOCOL_SERVER_CONFIG> result;
-	XMLElement *protocol_server_config = root->FirstChildElement("protocol-server-config");
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadProtocolServerConfigurations
+// ─────────────────────────────────────────────────────────────────────────────
 
-	XMLElement *protocol_server = protocol_server_config->FirstChildElement("protocol-server");
-	if (protocol_server == nullptr) {
-		return XML_ERROR_PARSING_ELEMENT;
-	}
-	while (protocol_server) {
-		PROTOCOL_SERVER_CONFIG config;
-		config.protocol_name = protocol_server->Attribute("protocol");
+XMLError ConfigParser::LoadProtocolServerConfigurations(
+        XMLNode *root,
+        std::vector<PROTOCOL_SERVER_CONFIG> &m_ProtocolServerConfig) {
+    std::vector<PROTOCOL_SERVER_CONFIG> result;
 
-		XMLElement *protocolPortElement = protocol_server->FirstChildElement("protocol-port");
-		if (NULL != protocolPortElement) {
-			config.protocol_port = std::stoi(protocolPortElement->GetText());
-		}
+    XMLElement *psConfig = root->FirstChildElement("protocol-server-config");
+    if (!psConfig) {
+        // No protocol servers — not an error.
+        m_ProtocolServerConfig = result;
+        return XML_SUCCESS;
+    }
 
-		XMLElement *pipelineElement = protocol_server->FirstChildElement("pipeline");
-		if (NULL != pipelineElement) {
-			config.pipeline = pipelineElement->GetText();
-		}
+    XMLElement *ps = psConfig->FirstChildElement("protocol-server");
+    while (ps) {
+        PROTOCOL_SERVER_CONFIG config;
+        const char *protocol = ps->Attribute("protocol");
+        config.protocol_name = protocol ? protocol : "";
 
-		XMLElement *handlerElement = protocol_server->FirstChildElement("handler");
-		if (NULL != handlerElement) {
-			config.handler = handlerElement->GetText();
-		}
+        XMLElement *portEl = ps->FirstChildElement("protocol-port");
+        if (portEl) {
+            const char *portText = portEl->GetText();
+            if (!portText) {
+                LOG_ERROR("Empty protocol-port for '" + config.protocol_name + "'");
+                return XML_ERROR_PARSING_ELEMENT;
+            }
+            try {
+                config.protocol_port = std::stoi(portText);
+            } catch (...) {
+                LOG_ERROR("Invalid protocol-port '" + std::string(portText)
+                          + "' for '" + config.protocol_name + "'");
+                return XML_ERROR_PARSING_ELEMENT;
+            }
+        }
 
-		XMLElement *authElement = protocol_server->FirstChildElement("auth");
-		if (authElement) {
-			config.auth = new AUTH_CONFIG();
-			XMLElement *strategyElement = authElement->FirstChildElement("strategy");
-			if (NULL != strategyElement) {
-				config.auth->strategy = strategyElement->GetText();
-			}
+        config.pipeline = safeText(ps->FirstChildElement("pipeline"));
+        config.handler  = safeText(ps->FirstChildElement("handler"));
 
-			XMLElement *handlerElement = authElement->FirstChildElement("handler");
-			if (NULL != handlerElement) {
-				config.auth->handler = handlerElement->GetText();
-			}
+        XMLElement *authEl = ps->FirstChildElement("auth");
+        if (authEl) {
+            config.auth           = new AUTH_CONFIG();
+            config.auth->strategy = safeText(authEl->FirstChildElement("strategy"));
+            config.auth->handler  = safeText(authEl->FirstChildElement("handler"));
 
-			XMLElement *authorizationElement = authElement->FirstChildElement("authorization");
-			if (authorizationElement) {
-				config.auth->authorization = new AUTHORIZATION_CONFIG();
-				XMLElement *strategyElement = authorizationElement->FirstChildElement("strategy");
-				if (NULL != strategyElement) {
-					config.auth->authorization->strategy = strategyElement->GetText();
-				}
+            XMLElement *authzEl = authEl->FirstChildElement("authorization");
+            if (authzEl) {
+                config.auth->authorization           = new AUTHORIZATION_CONFIG();
+                config.auth->authorization->strategy =
+                    safeText(authzEl->FirstChildElement("strategy"));
+                config.auth->authorization->handler =
+                    safeText(authzEl->FirstChildElement("handler"));
 
-				XMLElement *handlerElement = authorizationElement->FirstChildElement("handler");
-				if (NULL != handlerElement) {
-					config.auth->authorization->handler = handlerElement->GetText();
-				}
+                XMLElement *dataEl = authzEl->FirstChildElement("data");
+                if (dataEl) {
+                    XMLPrinter printer;
+                    dataEl->Accept(&printer);
+                    config.auth->authorization->data = printer.CStr();
+                }
+            } else {
+                config.auth->authorization = nullptr;
+            }
+        } else {
+            config.auth = nullptr;
+        }
 
-				XMLElement *dataElement = authorizationElement->FirstChildElement("data");
-				if (dataElement) {
-					XMLPrinter printer;
-					dataElement->Accept(&printer);
-					config.auth->authorization->data = printer.CStr();
-				}
-			}
-		} else {
-			config.auth = nullptr;
-		}
+        XMLElement *routesEl = ps->FirstChildElement("routes");
+        if (routesEl) {
+            XMLElement *routeEl = routesEl->FirstChildElement("route");
+            while (routeEl) {
+                Route r;
+                r.path            = safeText(routeEl->FirstChildElement("path"));
+                r.method          = safeText(routeEl->FirstChildElement("method"));
+                r.request_handler = safeText(routeEl->FirstChildElement("request_handler"));
+                r.auth.required   = (config.auth != nullptr);
 
-		XMLElement *routesElement = protocol_server->FirstChildElement("routes");
-		if (routesElement) {
-			XMLElement *routeElement = routesElement->FirstChildElement("route");
-			std::vector<Route> routes;
-			while (routeElement) {
-				Route r;
-				XMLElement *pathElement = routeElement->FirstChildElement("path");
-				if (NULL != pathElement) {
-					r.path = pathElement->GetText();
-				}
+                XMLElement *authCfg = routeEl->FirstChildElement("auth");
+                if (authCfg) {
+                    XMLElement *reqEl = authCfg->FirstChildElement("required");
+                    if (reqEl) {
+                        std::string reqStr = safeText(reqEl);
+                        toLower(reqStr);
+                        if (reqStr == "false" || reqStr == "0" || reqStr == "no") {
+                            r.auth.required = false;
+                        } else if (reqStr == "true" || reqStr == "1" || reqStr == "yes") {
+                            r.auth.required = true;
+                        } else {
+                            throw std::runtime_error(
+                                "Invalid auth.required value '" + reqStr
+                                + "' for route: " + r.path);
+                        }
+                    }
 
-				XMLElement *methodElement = routeElement->FirstChildElement("method");
-				if (NULL != methodElement) {
-					r.method = methodElement->GetText();
-				}
+                    XMLElement *authzEl = authCfg->FirstChildElement("authorization");
+                    if (authzEl) {
+                        XMLPrinter printer;
+                        authzEl->Accept(&printer);
+                        r.auth.authorization = printer.CStr();
+                    }
+                }
 
-				XMLElement *requestHandlerElement = routeElement->FirstChildElement("request_handler");
-				if (NULL != requestHandlerElement) {
-					r.request_handler = requestHandlerElement->GetText();
-				}
+                config.routes.push_back(r);
+                routeEl = routeEl->NextSiblingElement("route");
+            }
+        }
 
-				XMLElement *authConfigElement = routeElement->FirstChildElement("auth");
-				r.auth.required = (config.auth != nullptr);
-				if (authConfigElement) {
-					XMLElement *requiredElement = authConfigElement->FirstChildElement("required");
-					if (requiredElement) {
-						auto requiredStrC = requiredElement->GetText();
-						std::string requiredStr(requiredStrC ? requiredStrC : ""); // Ensure non-null string
-						std::transform(requiredStr.begin(), requiredStr.end(), requiredStr.begin(),
-									   [](unsigned char c) { return std::tolower(c); });
-						if (requiredStr == "false" || requiredStr == "0" || requiredStr == "no") {
-							r.auth.required = false;
-						} else if (requiredStr == "true" || requiredStr == "1" || requiredStr == "yes") {
-							r.auth.required = true;
-						} else {
-							throw std::runtime_error("Invalid or undefined auth configuration ('" + requiredStr +
-													 "') for route: " + r.path);
-						}
-					}
+        result.push_back(config);
+        ps = ps->NextSiblingElement("protocol-server");
+    }
 
-					XMLElement *authorizationElement = authConfigElement->FirstChildElement("authorization");
-					if (authorizationElement) {
-						XMLPrinter printer;
-						authorizationElement->Accept(&printer);
-						r.auth.authorization = printer.CStr();
-					}
-				}
-
-				routes.push_back(r);
-				routeElement = routeElement->NextSiblingElement("route");
-			}
-			config.routes = routes;
-		}
-
-		result.push_back(config);
-		protocol_server = protocol_server->NextSiblingElement("protocol-server");
-	}
-	m_ProtocolServerConfig = result;
-	return XML_SUCCESS;
+    m_ProtocolServerConfig = result;
+    return XML_SUCCESS;
 }
 
-ENDPOINT_SERVICE_CONFIG ConfigParser::ParseEndPointServiceConfiguration(XMLDocument *xmlDoc) {
-	ENDPOINT_SERVICE_CONFIG proxyEndpointServiceConfig;
-	XMLElement *pEndPoint = xmlDoc->FirstChildElement("end_point");
-	if (pEndPoint == nullptr) {
-		throw std::runtime_error("Error Parsing XML Element.");
-	}
-	auto endPointName = pEndPoint->Attribute("name");
-	proxyEndpointServiceConfig.name = endPointName;
+// ─────────────────────────────────────────────────────────────────────────────
+// ParseEndPointServiceConfiguration
+// ─────────────────────────────────────────────────────────────────────────────
 
-	XMLElement *pOperation = pEndPoint->FirstChildElement("operation");
-	if (nullptr != pOperation) {
-		proxyEndpointServiceConfig.operation = pOperation->GetText();
-	}
+ENDPOINT_SERVICE_CONFIG
+ConfigParser::ParseEndPointServiceConfiguration(XMLDocument *xmlDoc) {
+    if (!xmlDoc) {
+        throw std::runtime_error("ParseEndPointServiceConfiguration: null XMLDocument.");
+    }
 
-	XMLElement *pService = pEndPoint->FirstChildElement("service");
-	if (nullptr != pService) {
-		auto serviceName = pService->Attribute("name");
-		proxyEndpointServiceConfig.service.name = serviceName;
-	}
+    ENDPOINT_SERVICE_CONFIG cfg;
 
-	XMLElement *pHost = pService->FirstChildElement("host");
-	if (nullptr != pHost) {
-		auto hostName = "";
-		hostName = pHost->GetText();
-		proxyEndpointServiceConfig.service.host = hostName;
-	}
+    XMLElement *pEndPoint = xmlDoc->FirstChildElement("end_point");
+    if (!pEndPoint) {
+        throw std::runtime_error("ParseEndPointServiceConfiguration: <end_point> not found.");
+    }
 
-	XMLElement *pPort = pService->FirstChildElement("port");
-	if (nullptr != pPort) {
-		auto port = 0;
-		XMLError eResult = pPort->QueryIntText(&port);
-		if (eResult != tinyxml2::XML_SUCCESS) {
-			throw std::runtime_error("Port Must be an Integer value.");
-		}
-		proxyEndpointServiceConfig.service.port = port;
-	}
-	LOG_INFO("Service Configuration parsed successfully!");
-	return proxyEndpointServiceConfig;
+    const char *epName = pEndPoint->Attribute("name");
+    cfg.name = epName ? epName : "";
+
+    cfg.operation = safeText(pEndPoint->FirstChildElement("operation"));
+    if (cfg.operation != "add" && cfg.operation != "delete") {
+        throw std::runtime_error(
+            "ParseEndPointServiceConfiguration: operation must be 'add' or 'delete', got '"
+            + cfg.operation + "'");
+    }
+
+    XMLElement *pService = pEndPoint->FirstChildElement("service");
+    if (!pService) {
+        throw std::runtime_error("ParseEndPointServiceConfiguration: <service> not found.");
+    }
+
+    const char *svcName = pService->Attribute("name");
+    cfg.service.name = svcName ? svcName : "";
+    cfg.service.host = safeText(pService->FirstChildElement("host"));
+
+    XMLElement *pPort = pService->FirstChildElement("port");
+    if (pPort) {
+        int port = 0;
+        XMLError err = pPort->QueryIntText(&port);
+        if (err != XML_SUCCESS) {
+            throw std::runtime_error("ParseEndPointServiceConfiguration: invalid port value.");
+        }
+        cfg.service.port = port;
+    }
+
+    LOG_INFO("Endpoint service configuration parsed successfully.");
+    return cfg;
 }
