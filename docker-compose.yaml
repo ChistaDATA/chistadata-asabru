@@ -1,423 +1,221 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yaml — Chista Asabru development / integration stack
+#
+# Security practices
+# ──────────────────
+# • Credentials are read from environment variables (set them in .env or via
+#   your secrets manager — never hard-code passwords in this file).
+# • Copy .env.sample to .env and fill in the required values before running.
+# • Containers that do not need network access are isolated on a dedicated
+#   backend network.
+#
+# Usage
+#   cp .env.sample .env   # fill in secrets
+#   docker compose up -d
+# ─────────────────────────────────────────────────────────────────────────────
 version: "3.8"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Services
+# ─────────────────────────────────────────────────────────────────────────────
 services:
+
+  # ── ClickHouse node 1 (primary) ──────────────────────────────────────────
   clickhouse-1:
     image: clickhouse/clickhouse-server:23.11
+    restart: unless-stopped
     environment:
-      - CLICKHOUSE_DB=default
-      - CLICKHOUSE_USER=default
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-      - CLICKHOUSE_PASSWORD=password
+      CLICKHOUSE_DB:                        default
+      CLICKHOUSE_USER:                      ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_PASSWORD:                  ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
     ports:
-      - "9363:9363"
       - "9000:9000"
-      - "9440:9440"
       - "8123:8123"
-      - "8443:8443"
-
     volumes:
-      - ./external/clickhouse-1/config.xml:/etc/clickhouse-server/config.xml
-      - ./external/clickhouse-1/init-db.sql:/docker-entrypoint-initdb.d/init.sql
-        # Uncomment the below lines to setup TLS for wire level protocol
-        # Reference : https://www.bytebase.com/blog/how-to-configure-clickhouse-ssl-connection/
-#       - /Users/midhundarvin/software/openssl/trusted/rootCA.pem:/etc/clickhouse-server/ca.pem
-#       - /Users/midhundarvin/software/openssl/trusted/root.localhost.pem:/etc/clickhouse-server/server.pem
-#       - /Users/midhundarvin/software/openssl/trusted/device.key:/etc/clickhouse-server/server.key
-#       - /Users/midhundarvin/software/openssl/dhparam.pem:/etc/clickhouse-server/dhparam.pem
-#       - /Users/midhundarvin/software/openssl/config.xml:/etc/clickhouse-server/config.xml
+      - ./external/clickhouse-1/config.xml:/etc/clickhouse-server/config.xml:ro
+      - ./external/clickhouse-1/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
     networks:
       - backend
 
+  # ── ClickHouse node 2 (for log ingestion via Fluent Bit) ─────────────────
+  clickhouse-2:
+    image: clickhouse/clickhouse-server:23.11
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB:                        fluentbit
+      CLICKHOUSE_USER:                      ${CLICKHOUSE_2_USER:-fluentbit}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_PASSWORD:                  ${CLICKHOUSE_2_PASSWORD:?CLICKHOUSE_2_PASSWORD must be set}
+    ports:
+      - "8124:8123"
+    volumes:
+      - ./external/clickhouse-2/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - backend
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
   postgres-1:
-    image: postgres:14.4
+    image: postgres:16
+    restart: unless-stopped
     command:
       - -c
       - shared_preload_libraries=pg_stat_statements
-    #    command: >
-    #      -c ssl=on
-    #      -c ssl_cert_file=/var/lib/postgresql/server.crt
-    #      -c ssl_key_file=/var/lib/postgresql/server.key
     ports:
       - "5432:5432"
-      - "2345:2345"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
-      PGDATA: /var/lib/postgresql/postgres-1/data/pgdata
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      PGDATA:            /var/lib/postgresql/data/pgdata
     volumes:
       - source: ./external/postgres
         target: /docker-entrypoint-initdb.d
-        type: bind
+        type:   bind
         read_only: true
       - source: pg_data
-        target: /var/lib/postgresql/postgres-1/data
-        type: volume
-      - /Users/midhundarvin/certs/postgres/server.crt:/var/lib/postgresql/server.crt:ro
-      - /Users/midhundarvin/certs/postgres/server.key:/var/lib/postgresql/server.key:ro
+        target: /var/lib/postgresql/data
+        type:   volume
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
     networks:
       - backend
 
+  # ── PostgreSQL Prometheus exporter ───────────────────────────────────────
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:latest
+    restart: unless-stopped
     command: >
       --config.file="/tmp/postgres_exporter.yml"
     ports:
       - "9187:9187"
     volumes:
-      - ./external/postgres-exporter/postgres_exporter.yml:/tmp/postgres_exporter.yml
+      - ./external/postgres-exporter/postgres_exporter.yml:/tmp/postgres_exporter.yml:ro
     environment:
-      DATA_SOURCE_NAME: "postgresql://postgres:123456@postgres-1:5432/postgres?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres-1:5432/postgres?sslmode=disable"
+    depends_on:
+      postgres-1:
+        condition: service_healthy
     networks:
       - backend
 
-  clickhouse-2:
-    image: clickhouse/clickhouse-server:23.11
-    ports:
-#      - "9000:9000"
-#      - "9440:9440"
-      - "8124:8123"
-#      - "8443:8443"
-    environment:
-      - CLICKHOUSE_DB=fluentbit
-      - CLICKHOUSE_USER=fluentbit
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-      - CLICKHOUSE_PASSWORD=password
-    volumes:
-      - "./external/clickhouse-2/init-db.sql:/docker-entrypoint-initdb.d/init.sql"
-    networks:
-      - backend
-
+  # ── Fluent Bit (log aggregator) ───────────────────────────────────────────
   fluent-bit:
     image: fluent/fluent-bit:latest
-    restart: always
+    restart: unless-stopped
     volumes:
-      - ./external/fluent-bit/functions.lua:/fluent-bit/scripts/functions.lua
-      - ./external/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
-      - ./external/fluent-bit/parser.conf:/fluent-bit/etc/parser.conf
+      - ./external/fluent-bit/functions.lua:/fluent-bit/scripts/functions.lua:ro
+      - ./external/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./external/fluent-bit/parser.conf:/fluent-bit/etc/parser.conf:ro
     ports:
       - "5170:5170"
     depends_on:
-      - clickhouse-1
+      clickhouse-1:
+        condition: service_healthy
     networks:
       - backend
-#
-#  parseable:
-#    image: parseable/parseable:edge
-#    command: ["parseable", "local-store"]
-#    ports:
-#      - "8000:8000"
-#    environment:
-#      - P_S3_URL=https://minio.parseable.io:9000
-#      - P_S3_ACCESS_KEY=minioadmin
-#      - P_S3_SECRET_KEY=minioadmin
-#      - P_S3_REGION=us-east-1
-#      - P_S3_BUCKET=parseable
-#      - P_LOCAL_STORAGE=/tmp/data
-#      - P_USERNAME=parseable
-#      - P_PASSWORD=parseable
-#      - P_STAGING_DIR=/parseable/staging
-#      - P_LOCAL_MODE=true
-#    volumes:
-#      - source: parseable_data
-#        target: /parseable
-#        type: volume
-#    networks:
-#      - backend
 
+  # ── Prometheus ────────────────────────────────────────────────────────────
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:latest
     container_name: prometheus
+    restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
     ports:
       - "9090:9090"
-    restart: unless-stopped
     volumes:
-      - ./external/prometheus:/etc/prometheus
+      - ./external/prometheus:/etc/prometheus:ro
       - prom_data:/prometheus
     networks:
       - backend
 
+  # ── Grafana ───────────────────────────────────────────────────────────────
   grafana:
-    image: grafana/grafana
+    image: grafana/grafana:latest
     container_name: grafana
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_EXPORTER_ACCOUNT:-}
-      SNOWFLAKE_USERNAME: ${SNOWFLAKE_EXPORTER_USERNAME:-}
-      SNOWFLAKE_PASSWORD: ${SNOWFLAKE_EXPORTER_PASSWORD:-}
-      SNOWFLAKE_ROLE: ${SNOWFLAKE_EXPORTER_ROLE:-}
-      SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_EXPORTER_WAREHOUSE:-}
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: grafana
-      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ADMIN_USER:                  ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD:              ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      GF_AUTH_ANONYMOUS_ENABLED:               "false"
+      GF_INSTALL_PLUGINS:                      grafana-clickhouse-datasource
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: michelin-snowflake-datasource
+      GF_SECURITY_DISABLE_GRAVATAR:            "true"
+      GF_ANALYTICS_REPORTING_ENABLED:         "false"
     volumes:
       - source: ./external/grafana/provisioning
         target: /etc/grafana/provisioning
-        type: bind
+        type:   bind
+        read_only: true
       - source: ./external/grafana/dashboards
         target: /var/lib/grafana/dashboards
-        type: bind
+        type:   bind
+        read_only: true
       - source: ./external/grafana/plugins
         target: /var/lib/grafana/plugins
-        type: bind
+        type:   bind
+    depends_on:
+      - prometheus
     networks:
       - backend
-#
-#  snowflake-exporter:
-#    build:
-#      context: ./external/snowflake-exporter
-#    ports:
-#      - "9975:9975"
-#    environment:
-#      SNOWFLAKE_EXPORTER_ACCOUNT: ${SNOWFLAKE_EXPORTER_ACCOUNT:-}
-#      SNOWFLAKE_EXPORTER_USERNAME: ${SNOWFLAKE_EXPORTER_USERNAME:-}
-#      SNOWFLAKE_EXPORTER_PASSWORD: ${SNOWFLAKE_EXPORTER_PASSWORD:-}
-#      SNOWFLAKE_EXPORTER_ROLE: ${SNOWFLAKE_EXPORTER_ROLE:-}
-#      SNOWFLAKE_EXPORTER_WAREHOUSE: ${SNOWFLAKE_EXPORTER_WAREHOUSE:-}
-#      SNOWFLAKE_EXPORTER_WEB_TELEMETRY_PATH: ${SNOWFLAKE_EXPORTER_WEB_TELEMETRY_PATH:-}
-#    networks:
-#      - backend
 
+  # ── MongoDB (for session storage / auxiliary data) ────────────────────────
   mongo:
-    image: mongo
+    image: mongo:7
+    restart: unless-stopped
     ports:
-      - 27017:27017
+      - "27017:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: example
-
-  mongo-express:
-    image: mongo-express
-    ports:
-      - 8081:8081
-    environment:
-      ME_CONFIG_BASICAUTH_USERNAME: root
-      ME_CONFIG_BASICAUTH_PASSWORD: example
-      ME_CONFIG_MONGODB_ADMINUSERNAME: root
-      ME_CONFIG_MONGODB_ADMINPASSWORD: example
-      ME_CONFIG_MONGODB_URL: mongodb://root:example@mongo:27017/
-
-  rundeck:
-    build:
-      context: ./external/rundeck
-      dockerfile: ./Dockerfile
-    links:
-      - mysql
-    environment:
-      RUNDECK_GRAILS_URL: http://localhost:4440
-      RUNDECK_DATABASE_DRIVER: org.mariadb.jdbc.Driver
-      RUNDECK_DATABASE_USERNAME: rundeck
-      RUNDECK_DATABASE_PASSWORD: rundeck
-      RUNDECK_DATABASE_URL: jdbc:mariadb://mysql/rundeck?autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true
-      RUNDECK_SERVER_ADDRESS: 0.0.0.0
-      RUNDECK_FEATURE_UINEXT_NAME: uiNext
-      RUNDECK_FEATURE_UINEXT_ENABLED: 'true'
-    ports:
-      - 4440:4440
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD must be set}
+    volumes:
+      - mongo_data:/data/db
     networks:
       - backend
 
+  # ── MySQL (Rundeck backing store) ─────────────────────────────────────────
   mysql:
-    container_name: mysql
     image: mysql:8
+    container_name: mysql
+    restart: unless-stopped
+    cap_add:
+      - SYS_NICE
     expose:
       - 3306
-    cap_add:
-      - SYS_NICE  # CAP_SYS_NICE reduces error messages in console
     environment:
-      - MYSQL_ROOT_PASSWORD=root
-      - MYSQL_DATABASE=rundeck
-      - MYSQL_USER=rundeck
-      - MYSQL_PASSWORD=rundeck
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+      MYSQL_DATABASE:      rundeck
+      MYSQL_USER:          rundeck
+      MYSQL_PASSWORD:      ${MYSQL_RUNDECK_PASSWORD:?MYSQL_RUNDECK_PASSWORD must be set}
+    volumes:
+      - mysql_data:/var/lib/mysql
     networks:
       - backend
 
-#  intercepting-proxy:
-#    # platform: linux/amd64
-#    build:
-#      context: .
-#      dockerfile: ./Dockerfile
-#    ports:
-#      - "8080:8080"
-#      - "9100:9100"
-#      - "9110:9110"
-#      - "9120:9120"
-#      - "9130:9130"
-#      - "9140:9140"
-#      - "9150:9150"
-#      - "9160:9160"
-#      - "9170:9170"
-#    depends_on:
-#      - clickhouse-1
-#      - fluent-bit
-##      - parseable
-#    environment:
-#      # CONFIG_FILE_URL: https://pastebin.com/raw/2Ts9aeN7 # Thread per client version
-#      # CONFIG_FILE_URL: https://pastebin.com/raw/72vCDJvm # libuv version
-#      CONFIG_FILE_PATH: /bin/config.xml
-#      LOGGER_TYPE: NET
-#      NETWORK_LOGGER_HOST: fluent-bit
-#      NETWORK_LOGGER_PORT: 5170
-#      SSL_CERT_FILE_PATH: /bin/server.pem
-#      SSL_KEY_FILE_PATH: /bin/server.key
-#      SSL_VERIFY_CERT: false
-#    # network_mode: "host"
-#    volumes:
-#      - ./docker-proxy-config.xml:/bin/config.xml
-#      - /Users/midhundarvin/software/openssl/server.pem:/bin/server.pem
-#      - /Users/midhundarvin/software/openssl/server.key:/bin/server.key
-#    links:
-#      - "clickhouse-1:clickhouse-1"
-##      - "postgres-1:postgres-1"
-#      - "fluent-bit:fluent-bit"
-#    #      - "serving-proxy-1:cluster-1"
-#    #      - "serving-proxy-2:cluster-2"
-#    #      - "serving-proxy-3:cluster-3"
-#    #      - "serving-proxy-4:cluster-4"
-#    networks:
-#      - backend
-
-#  zookeeper:
-#    image: 'bitnami/zookeeper:latest'
-#    ports:
-#      - '2181:2181'
-#    environment:
-#      ALLOW_ANONYMOUS_LOGIN: yes
-#    networks:
-#      - backend
-
-#  zk-monitor:
-#    build:
-#      context: ./lib/zk-cluster-monitor-client
-#      dockerfile: ./Dockerfile
-#    environment:
-#      MODE: monitor
-#      ZK_HOST: zookeeper:2181
-#      ZK_ROOT_NODE: /cluster1
-#      ASABRU_API_URL: http://proxy:8080/updateService
-#    links:
-#      - "zookeeper:zookeeper"
-#      - "intercepting-proxy:proxy"
-#    depends_on:
-#      - zookeeper
-#      - intercepting-proxy
-#    networks:
-#      - backend
-#
-#  zk-client-1:
-#    build:
-#      context: ./lib/zk-cluster-monitor-client
-#      dockerfile: ./Dockerfile
-#    environment:
-#      MODE: client
-#      ZK_HOST: zookeeper:2181
-#      ZK_ROOT_NODE: /cluster1
-#    links:
-#      - "zookeeper:zookeeper"
-#    depends_on:
-#      - zk-monitor
-#      - intercepting-proxy
-#    networks:
-#      - backend
-#
-#  serving-proxy-1:
-#    build:
-#      context: .
-#      dockerfile: ./Dockerfile
-#    expose:
-#      - "9100"
-#      - "9110"
-#    ports:
-#      - "9111:9110"
-#    environment:
-#      CONFIG_FILE_URL: https://pastebin.com/raw/NSufsj00
-#      CONFIG_FILE_PATH: /tmp/config.xml
-#    networks:
-#      - backend
-#
-#  serving-proxy-2:
-#    build:
-#      context: .
-#      dockerfile: ./Dockerfile
-#    expose:
-#      - "9100"
-#      - "9110"
-#    ports:
-#      - "9112:9110"
-#    environment:
-#      CONFIG_FILE_URL: https://pastebin.com/raw/NSufsj00
-#      CONFIG_FILE_PATH: /tmp/config.xml
-#    networks:
-#      - backend
-#
-#  serving-proxy-3:
-#    build:
-#      context: .
-#      dockerfile: ./Dockerfile
-#    expose:
-#      - "9100"
-#      - "9110"
-#    ports:
-#      - "9113:9110"
-#    environment:
-#      CONFIG_FILE_URL: https://pastebin.com/raw/NSufsj00
-#      CONFIG_FILE_PATH: /tmp/config.xml
-#    networks:
-#      - backend
-#
-#  serving-proxy-4:
-#    build:
-#      context: .
-#      dockerfile: ./Dockerfile
-#    expose:
-#      - "9100"
-#      - "9110"
-#    ports:
-#      - "9114:9110"
-#    environment:
-#      CONFIG_FILE_URL: https://pastebin.com/raw/NSufsj00
-#      CONFIG_FILE_PATH: /tmp/config.xml
-#    networks:
-#      - backend
-
-#  mysql-1:
-#    image: mysql/mysql-server
-#    # NOTE: use of "mysql_native_password" is not recommended: https://dev.mysql.com/doc/refman/8.0/en/upgrading-from-previous-series.html#upgrade-caching-sha2-password
-#    # (this is just an example, not intended to be a production configuration)
-#    command: [ "mysqld",
-#               "--character-set-server=utf8mb4",
-#               "--collation-server=utf8mb4_unicode_ci",
-#               "--require_secure_transport=ON",
-#               "--ssl-ca=/etc/certs/root-ca.pem",
-#               "--ssl-cert=/etc/certs/server-cert.pem",
-#               "--ssl-key=/etc/certs/server-key.pem",
-#               "--default_authentication_plugin=mysql_native_password" ]
-#    restart: always
-#    environment:
-#      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
-#      MYSQL_ROOT_HOST: "%"
-#    volumes:
-#      - type: volume
-#        source: mysql_data
-#        target: /var/lib/mysql
-#      - type: bind
-#        source: /Users/midhundarvin/certs/mysql
-#        target: /etc/certs/
-#    ports:
-#      - "3306:3306"
-#    networks:
-#      - backend
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Named volumes
+# ─────────────────────────────────────────────────────────────────────────────
 volumes:
   pg_data:
   mysql_data:
-  parseable_data:
+  mongo_data:
   prom_data:
   grafana_storage:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────────────────────────────────────
 networks:
   backend:
     driver: bridge
