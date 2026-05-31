@@ -1,24 +1,65 @@
+# ─── macOS ───────────────────────────────────────────────────
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# ─── IDE / editors ───────────────────────────────────────────
 .idea/
+.vscode/
+*.sln
+*.iml
 cmake-build-debug/
+cmake-build-release/
+.cache/clangd
+
+# ─── Build outputs ───────────────────────────────────────────
 build/
+bin/
+obj/
+
+# ─── Compiler output ─────────────────────────────────────────
 *.o
+*.a
+*.so
+*.dylib
+
+# ─── Coverage ────────────────────────────────────────────────
+*.gcda
+*.gcno
+*.gcov
+
+# ─── Certificates / secrets (never commit real keys!) ───────
 *.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ─── Environment / secrets ───────────────────────────────────
+# .env.sample IS tracked — only the real .env is secret.
+.env
+.envrc
+
+# ─── Python ──────────────────────────────────────────────────
 __pycache__/
+*.pyc
+venv/
+
+# ─── Data files ──────────────────────────────────────────────
 *.csv
 *.xz
 *.backup
-.vscode
-debug
-venv
-*.iml
-bin/
-obj/
-.vs/
-*.sln
+
+# ─── Node / npm ──────────────────────────────────────────────
+node_modules/
+
+# ─── Java build artefacts ────────────────────────────────────
 **/java-client/target
 **/java-client/out
-.env
-.cache/clangd
+
+# ─── Grafana plugins (downloaded at runtime) ─────────────────
 external/grafana/plugins/snowflake-grafana-datasource
 external/grafana/plugins/grafana-clickhouse-datasource
+
+# ─── Debug builds ─────────────────────────────────────────────
+debug/
