@@ -1,176 +1,166 @@
-cmake_minimum_required(VERSION 3.20)
+#include "main.h"
+#include "logger/Logger.h"
+#include "util/ThreadPoolSingleton.h"
 
-# ─── Language standard ───────────────────────────────────────
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+#include <atomic>
+#include <csignal>
+#include <cstdlib>
+#include <iostream>
+#include <string>
 
-include(CMakePrintHelpers)
-include(GNUInstallDirs)
+// backtrace() / backtrace_symbols_fd() are Linux/macOS-only.
+#if defined(__linux__) || defined(__APPLE__)
+#  include <execinfo.h>
+#endif
 
-# ─── Preprocessor definitions ───────────────────────────────
-# Resolve optional paths from environment variables at build time.
-# Fall back to empty strings so the binary remains buildable without them.
-set(PLUGINS_FOLDER_PATH_DEFAULT "" CACHE STRING "Default plugin folder path (overridable via env PLUGINS_FOLDER_PATH)")
-set(CONFIG_FILE_DEFAULT     ""   CACHE STRING "Default config file path")
-set(CONFIG_FILE_URL_DEFAULT ""   CACHE STRING "Default config file URL")
+// ─── Globals ────────────────────────────────────────────────────────────────
+// Set by signal handlers; volatile + atomic ensures visibility across threads.
+static volatile std::sig_atomic_t g_shutdownRequested = 0;
 
-add_compile_definitions(
-    PLUGINS_FOLDER_PATH="$ENV{PLUGINS_FOLDER_PATH}"
-    CONFIG_FILE="$ENV{CONFIG_FILE}"
-    CONFIG_FILE_URL="$ENV{CONFIG_FILE_URL}"
-)
+// ─── Forward declarations ────────────────────────────────────────────────────
+static void setupSignalHandlers();
+static void onFatalSignal(int sig);
+static void printUsage(const char *programName);
+static bool parseArgs(int argc, char **argv);
 
-# ─── Build-type-aware macros ─────────────────────────────────
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_compile_definitions(CHISTA_DEBUG=1)
-else()
-    add_compile_definitions(CHISTA_DEBUG=0)
-endif()
+/**
+ * @brief Entry point for the Chista Asabru database proxy.
+ *
+ * Initialisation order:
+ * 1. Parse command-line arguments.
+ * 2. Install signal handlers.
+ * 3. Start proxy, protocol, and API-gateway servers.
+ * 4. Wait for a shutdown signal (SIGTERM / SIGINT).
+ * 5. Perform graceful shutdown.
+ */
+int main(int argc, char **argv) {
+    // Seed the PRNG (used for load-balancer strategies).
+    // std::mt19937 is preferred for new code, but srand is kept here for
+    // compatibility with the existing load-balancer implementation.
+    std::srand(static_cast<unsigned>(std::time(nullptr)));
 
-# ─── Threading ───────────────────────────────────────────────
-find_package(Threads REQUIRED)
+    if (!parseArgs(argc, argv)) {
+        return EXIT_FAILURE;
+    }
 
-# ─── CPM (package manager) ──────────────────────────────────
-include(../cmake/CPM.cmake)
+    setupSignalHandlers();
 
-# ─── OpenSSL ─────────────────────────────────────────────────
-set(OPENSSL_USE_STATIC_LIBS TRUE)
-find_package(OpenSSL REQUIRED)
-message(STATUS "OpenSSL version : ${OPENSSL_VERSION}")
-message(STATUS "OpenSSL include : ${OPENSSL_INCLUDE_DIR}")
+    // ── Proxy servers ──────────────────────────────────────────────────────
+    if (initProxyServers() < 0) {
+        LOG_ERROR("Fatal: failed to initialise proxy servers — aborting.");
+        return EXIT_FAILURE;
+    }
 
-# ─── Python (optional — required for the /python endpoint) ──
-find_package(Python COMPONENTS Interpreter Development REQUIRED)
-message(STATUS "Python version  : ${Python_VERSION}")
-include_directories(SYSTEM ${Python_INCLUDE_DIRS})
+    // ── Protocol servers ───────────────────────────────────────────────────
+    if (initProtocolServers() < 0) {
+        LOG_ERROR("Fatal: failed to initialise protocol servers — aborting.");
+        return EXIT_FAILURE;
+    }
 
-# ─── SQLite3 ─────────────────────────────────────────────────
-find_package(SQLite3 REQUIRED)
-include_directories(SYSTEM ${SQLite3_INCLUDE_DIRS})
+    // ── API-gateway servers ────────────────────────────────────────────────
+    if (initApiGatewayServers() < 0) {
+        LOG_ERROR("Fatal: failed to initialise API-gateway servers — aborting.");
+        return EXIT_FAILURE;
+    }
 
-# ─── asabru-commons ─────────────────────────────────────────
-if(ASABRU_COMMONS_BUILD STREQUAL "GIT_TAG")
-    CPMAddPackage(
-        NAME asabru_commons
-        GITHUB_REPOSITORY ChistaDATA/asabru-commons
-        GIT_TAG ${ASABRU_COMMONS_GIT_TAG}
-    )
-elseif(ASABRU_COMMONS_BUILD STREQUAL "LOCAL_DIR")
-    CPMAddPackage(
-        NAME asabru_commons
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../lib/asabru-commons/src
-    )
-else()
-    CPMAddPackage(
-        NAME asabru_commons
-        GITHUB_REPOSITORY ChistaDATA/asabru-commons
-        VERSION 0.0.3
-    )
-endif()
+    LOG_INFO("Chista Asabru proxy started successfully. Waiting for shutdown signal…");
 
-# ─── asabru-engine ──────────────────────────────────────────
-if(ASABRU_ENGINE_BUILD STREQUAL "GIT_TAG")
-    CPMAddPackage(
-        NAME asabru_engine
-        GITHUB_REPOSITORY ChistaDATA/asabru-engine
-        GIT_TAG ${ASABRU_ENGINE_GIT_TAG}
-    )
-elseif(ASABRU_ENGINE_BUILD STREQUAL "LOCAL_DIR")
-    CPMAddPackage(
-        NAME asabru_engine
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../lib/asabru-engine/src
-    )
-else()
-    CPMAddPackage(
-        NAME asabru_engine
-        GITHUB_REPOSITORY ChistaDATA/asabru-engine
-        VERSION 0.0.2
-    )
-endif()
+    // Block the main thread until a shutdown signal arrives.
+    // sigwait() is safer than pause() because it allows us to handle SIGTERM
+    // from within the main thread while other threads continue serving.
+    sigset_t waitSet;
+    sigemptyset(&waitSet);
+    sigaddset(&waitSet, SIGTERM);
+    sigaddset(&waitSet, SIGINT);
 
-# ─── asabru-parsers ─────────────────────────────────────────
-if(ASABRU_PARSERS_BUILD STREQUAL "GIT_TAG")
-    CPMAddPackage(
-        NAME asabru_parsers
-        GITHUB_REPOSITORY ChistaDATA/asabru-parsers
-        GIT_TAG ${ASABRU_PARSERS_GIT_TAG}
-    )
-elseif(ASABRU_PARSERS_BUILD STREQUAL "LOCAL_DIR")
-    CPMAddPackage(
-        NAME asabru_parsers
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../lib/asabru-parsers/src
-    )
-else()
-    CPMAddPackage(
-        NAME asabru_parsers
-        GITHUB_REPOSITORY ChistaDATA/asabru-parsers
-        VERSION 0.0.1
-    )
-endif()
+    int receivedSig = 0;
+    sigwait(&waitSet, &receivedSig);
 
-# ─── Pipeline source files ───────────────────────────────────
-file(GLOB_RECURSE PIPELINE_FILES "./pipelines/*.cpp")
+    LOG_INFO("Received signal " + std::to_string(receivedSig) + " — initiating graceful shutdown…");
 
-# ─── UI / config assets ──────────────────────────────────────
-# Only copy if the source exists (avoids hard failures in CI without the UI submodule)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../lib/asabru-ui/build")
-    file(COPY ../lib/asabru-ui/build/ DESTINATION ../public)
-endif()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../config.xml")
-    file(COPY ../config.xml DESTINATION ..)
-endif()
+    // TODO: call per-server stop() methods when they are added to the interface.
 
-# ─── Executable ─────────────────────────────────────────────
-add_executable(Chista_Asabru
-    main.h
-    main.cpp
+    LOG_INFO("Chista Asabru proxy shut down cleanly.");
+    return EXIT_SUCCESS;
+}
 
-    config/ConfigParser.cpp
-    config/ApiGatewayConfigParser.cpp
-    config/ConfigSingleton.cpp
-    config/PipelineFactory.cpp
-    config/LoadBalancerFactory.cpp
+// ─── Signal-handler setup ────────────────────────────────────────────────────
 
-    ${PIPELINE_FILES}
-)
+static void setupSignalHandlers() {
+    // Block SIGTERM and SIGINT so they are handled synchronously via sigwait().
+    sigset_t blockSet;
+    sigemptyset(&blockSet);
+    sigaddset(&blockSet, SIGTERM);
+    sigaddset(&blockSet, SIGINT);
+    pthread_sigmask(SIG_BLOCK, &blockSet, nullptr);
 
-# Enforce strict compile options on our own code only
-target_compile_options(Chista_Asabru PRIVATE
-    -Wall -Wextra -Wpedantic
-    -Wformat=2 -Wformat-security
-    -Wno-unused-parameter
-    -fstack-protector-strong
-)
+    // Ignore SIGPIPE: a broken client pipe must not kill the proxy process.
+    struct sigaction saPipe{};
+    saPipe.sa_handler = SIG_IGN;
+    sigemptyset(&saPipe.sa_mask);
+    sigaction(SIGPIPE, &saPipe, nullptr);
 
-target_compile_definitions(Chista_Asabru PRIVATE
-    _FORTIFY_SOURCE=2
-)
+    // Install a handler for unrecoverable signals (SIGSEGV, SIGBUS, SIGFPE).
+    struct sigaction saFatal{};
+    saFatal.sa_handler = onFatalSignal;
+    sigemptyset(&saFatal.sa_mask);
+    // SA_RESETHAND: revert to default after first delivery so we do not loop.
+    saFatal.sa_flags = SA_RESETHAND;
+    sigaction(SIGSEGV, &saFatal, nullptr);
+    sigaction(SIGBUS,  &saFatal, nullptr);
+    sigaction(SIGFPE,  &saFatal, nullptr);
+    sigaction(SIGILL,  &saFatal, nullptr);
+    sigaction(SIGABRT, &saFatal, nullptr);
+}
 
-# ─── Link libraries ─────────────────────────────────────────
-target_link_libraries(Chista_Asabru
-    PRIVATE
-        OpenSSL::SSL
-        OpenSSL::Crypto
-        ${Python_LIBRARIES}
-        SQLite::SQLite3
-        Threads::Threads
-        asabru_commons
-        asabru_engine
-        asabru_parsers
-        ${CMAKE_DL_LIBS}
-)
+/**
+ * @brief Handler for unrecoverable signals.
+ *
+ * Prints a stack trace to stderr and re-raises the signal so the OS can
+ * write a core dump.  This function must be async-signal-safe.
+ */
+static void onFatalSignal(int sig) {
+    // async-signal-safe calls only beyond this point.
+    const char prefix[] = "\n[FATAL] signal ";
+    write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
 
-# ─── Version header (auto-generated) ─────────────────────────
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/version.h.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/version.h"
-    @ONLY
-)
-target_include_directories(Chista_Asabru PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    // Write signal number as ASCII (no printf here — not async-signal-safe).
+    char sigBuf[8];
+    int n = sig;
+    int pos = static_cast<int>(sizeof(sigBuf)) - 1;
+    sigBuf[pos--] = '\n';
+    do { sigBuf[pos--] = '0' + (n % 10); n /= 10; } while (n && pos >= 0);
+    write(STDERR_FILENO, sigBuf + pos + 1, sizeof(sigBuf) - 1u - static_cast<unsigned>(pos));
 
-# ─── Install ─────────────────────────────────────────────────
-install(TARGETS Chista_Asabru
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+#if defined(__linux__) || defined(__APPLE__)
+    void *frames[32];
+    int nFrames = backtrace(frames, 32);
+    backtrace_symbols_fd(frames, nFrames, STDERR_FILENO);
+#endif
+
+    // Restore default and re-raise so the OS can generate a core dump.
+    raise(sig);
+}
+
+// ─── Argument parsing ────────────────────────────────────────────────────────
+
+static void printUsage(const char *programName) {
+    std::cerr
+        << "Usage: " << programName << " [options]\n"
+        << "  (no options currently — all configuration is via config.xml)\n"
+        << "  --help  Show this message\n";
+}
+
+static bool parseArgs(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg == "--help" || arg == "-h") {
+            printUsage(argv[0]);
+            return false;
+        }
+        std::cerr << "Unknown argument: " << arg << "\n";
+        printUsage(argv[0]);
+        return false;
+    }
+    return true;
+}
