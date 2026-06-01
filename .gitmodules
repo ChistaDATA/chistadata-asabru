@@ -3,44 +3,44 @@
 	url = https://github.com/leethomason/tinyxml2.git
 [submodule "lib/libuv"]
 	path = lib/libuv
-	url = git@github.com:libuv/libuv.git
+	url = https://github.com/libuv/libuv.git
 [submodule "asabru-parsers"]
 	path = lib/asabru-parsers
-	url = git@github.com:ChistaDATA/asabru-parsers.git
+	url = https://github.com/ChistaDATA/asabru-parsers.git
 	branch = main
 [submodule "asabru-engine"]
 	path = lib/asabru-engine
-	url = git@github.com:ChistaDATA/asabru-engine.git
+	url = https://github.com/ChistaDATA/asabru-engine.git
 	branch = main
 [submodule "asabru-commons"]
 	path = lib/asabru-commons
-	url = git@github.com:ChistaDATA/asabru-commons.git
+	url = https://github.com/ChistaDATA/asabru-commons.git
 	branch = main
 [submodule "lib/asabru-handlers"]
 	path = lib/asabru-handlers
-	url = git@github.com:ChistaDATA/asabru-handlers.git
+	url = https://github.com/ChistaDATA/asabru-handlers.git
 	branch = main
 [submodule "lib/nlohmann_json"]
 	path = lib/nlohmann_json
-	url = git@github.com:nlohmann/json.git
+	url = https://github.com/nlohmann/json.git
 	branch = develop
 [submodule "lib/zk-cluster-monitor-client"]
 	path = lib/zk-cluster-monitor-client
-	url = git@github.com:ChistaDATA/zk-cluster-monitor-client.git
+	url = https://github.com/ChistaDATA/zk-cluster-monitor-client.git
 	branch = main
 [submodule "lib/gzip-hpp"]
 	path = lib/gzip-hpp
-	url = git@github.com:mapbox/gzip-hpp.git
+	url = https://github.com/mapbox/gzip-hpp.git
 [submodule "lib/asabru-client"]
 	path = lib/asabru-client
-	url = git@github.com:ChistaDATA/asabru-client.git
+	url = https://github.com/ChistaDATA/asabru-client.git
 	branch = main
 [submodule "lib/stduuid"]
 	path = lib/stduuid
-	url = git@github.com:mariusbancila/stduuid.git
+	url = https://github.com/mariusbancila/stduuid.git
 [submodule "lib/asabru-ui"]
 	path = lib/asabru-ui
-	url = git@github.com:ChistaDATA/asabru-ui.git
+	url = https://github.com/ChistaDATA/asabru-ui.git
 [submodule "lib/jwt-cpp"]
 	path = lib/jwt-cpp
-	url = git@github.com:Thalhammer/jwt-cpp.git
+	url = https://github.com/Thalhammer/jwt-cpp.git
