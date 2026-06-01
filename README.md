@@ -1,20 +1,20 @@
 # ChistaDATA Asabru
 
 <p align="center">
-  <img src="img/ChistaDATA_logo.png" alt="ChistaDATA Asabru Logo" width="200"/>
-</p>p>
+  <img src="img/logo.svg" alt="ChistaDATA Asabru Logo" width="200"/>
+</p>
 
 <p align="center">
-  <strong>Enterprise-Class Protocol-Aware Database Proxy</strong>strong><br/>
+  <strong>Enterprise-Class Protocol-Aware Database Proxy</strong><br/>
     High-performance, secure, and scalable database proxy for ClickHouse, PostgreSQL, and MySQL
-</p>p>
+</p>
 
 <p align="center">
-  <a href="https://github.com/ChistaDATA/chista-asabru/actions"><img src="https://github.com/ChistaDATA/chista-asabru/workflows/CI/badge.svg" alt="CI Status"/></a>a>
-    <a href="https://github.com/ChistaDATA/chista-asabru/releases"><img src="https://img.shields.io/github/v/release/ChistaDATA/chista-asabru" alt="Latest Release"/></a>a>
-      <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>a>
-        <a href="docs.asabru.chistadata.io"><img src="https://img.shields.io/badge/docs-official-green.svg" alt="Documentation"/></a>a>
-</p>p>
+  <a href="https://github.com/ChistaDATA/chista-asabru/actions"><img src="https://github.com/ChistaDATA/chista-asabru/workflows/CI/badge.svg" alt="CI Status"/></a>
+    <a href="https://github.com/ChistaDATA/chista-asabru/rleases"><img src="https://img.shields.io/github/v/release/ChistaDATA/chista-asabru" alt="Latest Release"/></a>
+      <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
+        <a href="docs.asabru.chistadata.io"><img src="https://img.shields.io/badge/docs-official-green.svg" alt="Documentation"/></a>
+</p>
 
 ---
 
