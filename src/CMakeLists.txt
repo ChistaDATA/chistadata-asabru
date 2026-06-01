@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    LOG_INFO("Chista Asabru proxy started successfully. Waiting for shutdown signal…");
+    LOG_INFO("Chista Asabru proxy started successfully. Waiting for shutdown signal...");
 
     // Block the main thread until a shutdown signal arrives.
     // sigwait() is safer than pause() because it allows us to handle SIGTERM
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
     int receivedSig = 0;
     sigwait(&waitSet, &receivedSig);
 
-    LOG_INFO("Received signal " + std::to_string(receivedSig) + " — initiating graceful shutdown…");
+    LOG_INFO("Received signal " + std::to_string(receivedSig) + " -- initiating graceful shutdown...");
 
     // TODO: call per-server stop() methods when they are added to the interface.
 
@@ -124,13 +124,14 @@ static void onFatalSignal(int sig) {
     const char prefix[] = "\n[FATAL] signal ";
     write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
 
-    // Write signal number as ASCII (no printf here — not async-signal-safe).
+    // Write signal number as ASCII (no printf -- not async-signal-safe).
     char sigBuf[8];
     int n = sig;
     int pos = static_cast<int>(sizeof(sigBuf)) - 1;
     sigBuf[pos--] = '\n';
     do { sigBuf[pos--] = '0' + (n % 10); n /= 10; } while (n && pos >= 0);
-    write(STDERR_FILENO, sigBuf + pos + 1, sizeof(sigBuf) - 1u - static_cast<unsigned>(pos));
+    write(STDERR_FILENO, sigBuf + pos + 1,
+          static_cast<std::size_t>(static_cast<int>(sizeof(sigBuf)) - 1 - pos));
 
 #if defined(__linux__) || defined(__APPLE__)
     void *frames[32];
@@ -147,7 +148,7 @@ static void onFatalSignal(int sig) {
 static void printUsage(const char *programName) {
     std::cerr
         << "Usage: " << programName << " [options]\n"
-        << "  (no options currently — all configuration is via config.xml)\n"
+        << "  (no options currently -- all configuration is via config.xml)\n"
         << "  --help  Show this message\n";
 }
 
