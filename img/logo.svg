@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="400" height="120">
+    <defs>
+          <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" style="stop-color:#0D1B2A;stop-opacity:1" />
+                  <stop offset="100%" style="stop-color:#1A2E45;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" style="stop-color:#00C6FF;stop-opacity:1" />
+                  <stop offset="100%" style="stop-color:#0072FF;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" style="stop-color:#00C6FF;stop-opacity:1" />
+                  <stop offset="100%" style="stop-color:#0072FF;stop-opacity:1" />
+          </linearGradient>
+          <filter id="glow">
+                  <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                  <feMerge>
+                            <feMergeNode in="coloredBlur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                  </feMerge>
+          </filter>
+    </defs>
+
+    <!-- Background -->
+    <rect width="400" height="120" rx="12" ry="12" fill="url(#bgGrad)"/>
+
+    <!-- Shield / Proxy Icon -->
+    <g transform="translate(20, 15)" filter="url(#glow)">
+          <!-- Shield shape -->
+          <path d="M25,0 L50,10 L50,35 Q50,60 25,70 Q0,60 0,35 L0,10 Z"
+                      fill="url(#shieldGrad)" opacity="0.95"/>
+          <!-- Shield inner highlight -->
+          <path d="M25,6 L44,14 L44,35 Q44,54 25,63 Q6,54 6,35 L6,14 Z"
+                      fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+          <!-- Database cylinder inside shield -->
+          <ellipse cx="25" cy="24" rx="11" ry="4" fill="rgba(255,255,255,0.9)"/>
+          <rect x="14" y="24" width="22" height="14" fill="rgba(255,255,255,0.9)"/>
+          <ellipse cx="25" cy="38" rx="11" ry="4" fill="rgba(200,230,255,0.9)"/>
+          <!-- DB shine lines -->
+          <line x1="17" y1="28" x2="17" y2="36" stroke="rgba(0,100,200,0.4)" stroke-width="1.5"/>
+          <line x1="21" y1="26" x2="21" y2="38" stroke="rgba(0,100,200,0.3)" stroke-width="1"/>
+          <!-- Proxy arrow overlay -->
+          <path d="M19,48 L25,54 L31,48" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="25" y1="42" x2="25" y2="54" stroke="rgba(255,255,255,0.85)" stroke-width="2" stroke-linecap="round"/>
+    </g>
+
+    <!-- Network nodes decorative -->
+    <circle cx="88" cy="25" r="3" fill="#00C6FF" opacity="0.6"/>
+    <circle cx="88" cy="60" r="3" fill="#00C6FF" opacity="0.6"/>
+    <circle cx="88" cy="95" r="3" fill="#00C6FF" opacity="0.6"/>
+    <line x1="91" y1="25" x2="105" y2="60" stroke="#00C6FF" stroke-width="0.8" opacity="0.3"/>
+    <line x1="91" y1="95" x2="105" y2="60" stroke="#00C6FF" stroke-width="0.8" opacity="0.3"/>
+    <circle cx="105" cy="60" r="4" fill="#0072FF" opacity="0.7"/>
+
+    <!-- Main Title: ChistaDATA -->
+    <text x="120" y="52" font-family="'Segoe UI', Arial, sans-serif" font-size="28"
+              font-weight="700" fill="#FFFFFF" letter-spacing="1">ChistaDATA</text>
+
+    <!-- Subtitle: Asabru -->
+    <text x="122" y="76" font-family="'Segoe UI', Arial, sans-serif" font-size="20"
+              font-weight="400" fill="url(#accentGrad)" letter-spacing="3">ASABRU</text>
+
+    <!-- Tagline -->
+    <text x="120" y="96" font-family="'Segoe UI', Arial, sans-serif" font-size="10"
+              font-weight="300" fill="rgba(160,200,240,0.8)" letter-spacing="1.5">PROTOCOL-AWARE DATABASE PROXY</text>
+
+    <!-- Bottom accent line -->
+    <rect x="120" y="103" width="240" height="2" rx="1" fill="url(#accentGrad)" opacity="0.6"/>
+</svg>
